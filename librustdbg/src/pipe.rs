@@ -1,12 +1,12 @@
-const READ_FD: usize = 0;
-const WRITE_FD: usize = 1;
-
-const BUF_SIZE: usize = 1024;
-
 use core::str;
 
 use crate::bindings::{O_CLOEXEC, c_char, close, pipe2, read, write};
 use crate::error::errno_string;
+
+const READ_FD: usize = 0;
+const WRITE_FD: usize = 1;
+
+const BUF_SIZE: usize = 1024;
 
 pub struct Pipe {
     fds: [i32; 2],
@@ -27,13 +27,21 @@ impl Pipe {
         return pipe;
     }
 
+    pub fn get_read(&self) -> i32 {
+        self.fds[READ_FD]
+    }
+
+    pub fn get_write(&self) -> i32 {
+        self.fds[WRITE_FD]
+    }
+
     pub fn read(&self) -> Vec<u8> {
         let mut buf: [c_char; BUF_SIZE] = [0 as c_char; 1024];
         unsafe {
             // TODO: send errno
             let bytes_read = read(self.fds[READ_FD], buf.as_mut_ptr(), BUF_SIZE);
             if bytes_read < 0 {
-                println!("error reading: {}", errno_string())
+                println!("error reading: {}", errno_string());
             }
             return Vec::from(&buf[..bytes_read as usize]);
         }

@@ -7,4 +7,5 @@ edition = "2024"
 name = "librustdbg"
 path = "src/lib.rs"
 
-[dependencies]
+[build-dependencies]
+cc = "1.4.5"

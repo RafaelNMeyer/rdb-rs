@@ -1,12 +1,17 @@
+use std::cell::RefCell;
 use std::process::exit;
 use std::ptr::{self, null};
+use std::rc::Rc;
 
 use crate::error::{Error, errno_string};
+use crate::register_info::{RegisterId, register_info_by_id};
+use crate::registers::Registers;
+use crate::user::{user_fpregs_struct, user_regs_struct};
 use crate::{Pipe, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WIFSTOPPED, WSTOPSIG, WTERMSIG};
 
 use crate::bindings::{
-    PTRACE_REQUEST::*, SIGNALS::*, STDOUT_FILENO, c_char, char_ptr_to_string, dup2, execlp, fork,
-    kill, pid_t, ptrace, sigabbrev_np, waitpid,
+    __errno_location, PTRACE_REQUEST::*, SIGNALS::*, STDOUT_FILENO, c_char, char_ptr_to_string,
+    dup2, execlp, fork, kill, pid_t, ptrace, sigabbrev_np, waitpid,
 };
 
 pub struct Process {
@@ -14,8 +19,10 @@ pub struct Process {
     terminate_on_end: bool,
     is_attached: bool,
     state: ProcessState,
+    pub registers: Option<Registers>,
 }
 
+#[derive(Debug)]
 pub enum ProcessState {
     Stopped,
     Running,
@@ -23,6 +30,7 @@ pub enum ProcessState {
     Terminated,
 }
 
+#[derive(Debug)]
 pub struct StopReason {
     pub reason: ProcessState,
     pub info: u8,
@@ -35,16 +43,21 @@ impl StopReason {
 }
 
 impl Process {
-    fn new(pid: pid_t, terminate_on_end: bool, is_attached: bool) -> Process {
-        Process {
+    pub fn new(pid: pid_t, terminate_on_end: bool, is_attached: bool) -> Rc<RefCell<Process>> {
+        let proc = Process {
             pid,
             terminate_on_end,
             is_attached,
             state: ProcessState::Stopped,
-        }
+            registers: None,
+        };
+        let proc_ref = Rc::new(RefCell::new(proc));
+        let regs = Registers::new(Rc::downgrade(&proc_ref));
+        proc_ref.borrow_mut().registers = Some(regs);
+        proc_ref
     }
 
-    pub fn attach(pid: pid_t) -> Result<Box<Process>, Error> {
+    pub fn attach(pid: pid_t) -> Result<Rc<RefCell<Process>>, Error> {
         if pid <= 0 {
             return Err(Error::send("Invalid pid"));
         }
@@ -60,10 +73,13 @@ impl Process {
                 return Err(Error::send_errno("Couldn't attach to process"));
             }
         }
-        let mut proc = Box::new(Self::new(
+        // let mut proc = Box::new(Self::new(
+        //     pid, /*terminate_on_end*/ false, /*is_attached*/ true,
+        // ));
+        let proc = Self::new(
             pid, /*terminate_on_end*/ false, /*is_attached*/ true,
-        ));
-        proc.wait_on_signal()?;
+        );
+        proc.borrow_mut().wait_on_signal()?;
 
         Ok(proc)
     }
@@ -72,7 +88,7 @@ impl Process {
         mut path: String,
         debug: bool,
         stdout_replacement: Option<i32>,
-    ) -> Result<Box<Process>, Error> {
+    ) -> Result<Rc<RefCell<Process>>, Error> {
         let mut channel = Pipe::new(true);
         unsafe {
             let pid = fork();
@@ -109,12 +125,12 @@ impl Process {
                 return Err(Error::send(chars));
             }
 
-            let mut proc = Box::new(Self::new(
+            let proc = Self::new(
                 pid, /*terminate_on_end*/ true, /*is_attached*/ debug,
-            ));
+            );
 
             if debug {
-                proc.wait_on_signal()?;
+                proc.borrow_mut().wait_on_signal()?;
             }
 
             Ok(proc)
@@ -123,7 +139,7 @@ impl Process {
 
     pub fn resume(&mut self) -> Result<(), Error> {
         unsafe {
-            if ptrace(PTRACE_CONT, self.pid, ptr::null(), ptr::null()) < 0 {
+            if ptrace(PTRACE_CONT, self.pid, null(), null()) < 0 {
                 return Err(Error::send_errno("Could not resume"));
             }
         }
@@ -141,16 +157,102 @@ impl Process {
         }
         let reason = StopReason::new(wait_status);
         self.state = reason.reason;
-
         if self.is_attached && matches!(self.state, ProcessState::Stopped) {
-            // read_all_registers();
+            self.read_all_registers()?;
         }
 
         Ok(reason)
     }
 
+    fn read_all_registers(&mut self) -> Result<(), Error> {
+        let mut regs = self.registers.take().unwrap();
+        unsafe {
+            if ptrace(
+                PTRACE_GETREGS,
+                self.pid,
+                null(),
+                (&regs.data.regs as *const user_regs_struct).cast::<u64>(),
+            ) < 0
+            {
+                return Err(Error::send_errno("Could not read GPR registers"));
+            }
+            if ptrace(
+                PTRACE_GETFPREGS,
+                self.pid,
+                null(),
+                (&regs.data.i387 as *const user_fpregs_struct).cast::<u64>(),
+            ) < 0
+            {
+                return Err(Error::send_errno("Could not read FPR registers"));
+            }
+            let mut id: RegisterId;
+            let mut i = 0;
+            while i < 8 {
+                match i {
+                    0 => id = RegisterId::dr0,
+                    1 => id = RegisterId::dr1,
+                    2 => id = RegisterId::dr2,
+                    3 => id = RegisterId::dr3,
+                    4 => id = RegisterId::dr4,
+                    5 => id = RegisterId::dr5,
+                    6 => id = RegisterId::dr6,
+                    7 => id = RegisterId::dr7,
+                    _ => return Err(Error::send("debugger reg does not exists")),
+                }
+                let info = register_info_by_id(id)?;
+                let data: i64 = ptrace(
+                    PTRACE_PEEKUSER,
+                    self.pid,
+                    (info.offset as *const usize).cast::<u64>(),
+                    null(),
+                );
+                if *__errno_location() != 0 {
+                    return Err(Error::send_errno("Could not read from debug registers"));
+                }
+                regs.data.u_debugreg[i] = data as u64;
+                i += 1;
+            }
+            self.registers = Some(regs);
+            Ok(())
+        }
+    }
+
     pub fn pid(&self) -> pid_t {
         self.pid
+    }
+
+    pub fn write_fprs(&self, fprs: &user_fpregs_struct) -> Result<(), Error> {
+        unsafe {
+            if ptrace(
+                PTRACE_SETFPREGS,
+                self.pid,
+                null(),
+                (fprs as *const user_fpregs_struct).cast::<u64>(),
+            ) < 0
+            {
+                return Err(Error::send_errno("Could not write to user area"));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn write_user_area(&self, offset: usize, data: u64) -> Result<(), Error> {
+        let off: u64 = match offset.try_into() {
+            Ok(v) => v,
+            Err(_) => return Err(Error::send("could not transform offset usize to u64")),
+        };
+        unsafe {
+            if ptrace(
+                PTRACE_POKEUSER,
+                self.pid,
+                (off as *const usize).cast::<u64>(),
+                data as *const u64,
+            ) < 0
+            {
+                return Err(Error::send_errno("Could not write to user area"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -272,8 +374,9 @@ mod tests {
 
     #[test]
     fn process_launch_success() {
-        let proc = Process::launch("yes".to_string(), false, None).unwrap();
-        assert!(process_exists(proc.pid));
+        build_targets();
+        let proc = Process::launch("target/run_endlessly".to_string(), false, None).unwrap();
+        assert!(process_exists(proc.borrow_mut().pid));
     }
 
     #[test]
@@ -288,8 +391,8 @@ mod tests {
         let target = Process::launch("target/run_endlessly".to_string(), false, None).unwrap();
         // Need the _var to bind the value until the end of running.
         // Instead it'll drop the value immediately
-        let _attached = Process::attach(target.pid).unwrap();
-        assert_eq!(get_process_status(target.pid), 't');
+        let _attached = Process::attach(target.borrow().pid).unwrap();
+        assert_eq!(get_process_status(target.borrow().pid), 't');
     }
 
     #[test]
@@ -302,17 +405,17 @@ mod tests {
     fn process_resume_success() {
         build_targets();
         {
-            let mut proc = Process::launch("target/run_endlessly".to_string(), true, None).unwrap();
-            proc.resume().unwrap();
-            let status = get_process_status(proc.pid);
+            let proc = Process::launch("target/run_endlessly".to_string(), true, None).unwrap();
+            proc.borrow_mut().resume().unwrap();
+            let status = get_process_status(proc.borrow().pid);
             let success = status == 'R' || status == 'S';
             assert!(success);
         }
         {
             let target = Process::launch("target/run_endlessly".to_string(), false, None).unwrap();
-            let mut proc = Process::attach(target.pid).unwrap();
-            proc.resume().unwrap();
-            let status = get_process_status(proc.pid);
+            let proc = Process::attach(target.borrow().pid).unwrap();
+            proc.borrow_mut().resume().unwrap();
+            let status = get_process_status(proc.borrow().pid);
             let success = status == 'R' || status == 'S';
             assert!(success);
         }
@@ -321,11 +424,11 @@ mod tests {
     #[test]
     fn process_resume_already_terminated() {
         build_targets();
-        let mut proc = Process::launch("target/end_immediately".to_string(), true, None).unwrap();
+        let proc = Process::launch("target/end_immediately".to_string(), true, None).unwrap();
 
-        proc.resume().unwrap();
-        proc.wait_on_signal().unwrap();
+        proc.borrow_mut().resume().unwrap();
+        proc.borrow_mut().wait_on_signal().unwrap();
         // Resume should return Err so we explicit unwrap to an Err!
-        proc.resume().unwrap_err();
+        proc.borrow_mut().resume().unwrap_err();
     }
 }

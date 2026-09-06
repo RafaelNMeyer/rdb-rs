@@ -1,3 +1,5 @@
+use crate::types::Byte128;
+
 #[allow(non_camel_case_types)]
 pub type c_char = u8;
 #[allow(non_camel_case_types)]
@@ -13,7 +15,12 @@ pub const ESRCH: i32 = 3;
 #[repr(C)]
 pub enum PTRACE_REQUEST {
     PTRACE_TRACEME,
+    PTRACE_PEEKUSER = 3,
+    PTRACE_POKEUSER = 6,
     PTRACE_CONT = 7,
+    PTRACE_GETREGS = 12,
+    PTRACE_GETFPREGS = 14,
+    PTRACE_SETFPREGS = 15,
     PTRACE_ATTACH = 16,
     PTRACE_DETACH = 17,
 }
@@ -33,7 +40,7 @@ unsafe extern "C" {
     pub fn fork() -> pid_t;
     pub fn waitpid(pid: pid_t, status: *mut i32, options: i32) -> pid_t;
     pub fn execlp(file: *const c_char, arg: *const c_char, ...) -> i32;
-    pub fn ptrace(op: PTRACE_REQUEST, pid: pid_t, addr: *const u32, data: *const u32) -> i32;
+    pub fn ptrace(op: PTRACE_REQUEST, pid: pid_t, addr: *const u64, data: *const u64) -> i64;
     pub fn kill(pid: pid_t, sig: SIGNALS) -> i32;
 
     pub fn dup2(fd: i32, fd2: i32) -> i32;
@@ -46,6 +53,8 @@ unsafe extern "C" {
     pub fn strerror(errno: i32) -> *const c_char;
 
     pub fn sigabbrev_np(sig: i32) -> *const c_char;
+
+    pub fn double_to_bytes(value: f64) -> Byte128;
 }
 
 pub fn char_ptr_to_string(c_ptr: *const c_char) -> String {
@@ -76,7 +85,7 @@ macro_rules! WEXITSTATUS {
 #[macro_export]
 macro_rules! WIFSIGNALED {
     ($wait_status:expr) => {
-        ((((($wait_status) & 0x7f) + 1) >> 1) > 0)
+        ($wait_status & 0x7f) != 0 && ($wait_status & 0x7f) != 0x7f
     };
 }
 

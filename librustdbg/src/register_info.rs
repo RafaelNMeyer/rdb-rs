@@ -1,34 +1,39 @@
+use crate::Error;
 use crate::user::*;
 use core::mem::{offset_of, size_of_val, zeroed};
 
-enum RegisterType {
+#[derive(Copy, Clone, Debug)]
+pub enum RegisterType {
     GPR,
     SUBGPR,
     FPR,
     DR,
 }
 
-enum RegisterFormat {
+#[derive(Copy, Clone, Debug)]
+pub enum RegisterFormat {
     UINT,
     DOUBLEFLOAT,
     LONGDOUBLE,
     VECTOR,
 }
 
-pub struct RegisterInfo<'a> {
-    id: RegisterId,
-    name: &'a str,
-    dwarf_id: i32,
-    size: usize,
-    offset: usize, // offset to find it in <sys/user.h> c structs
-    r_type: RegisterType,
-    format: RegisterFormat,
+#[derive(Copy, Clone, Debug)]
+pub struct RegisterInfo {
+    pub id: RegisterId,
+    pub name: &'static str,
+    pub dwarf_id: i32,
+    pub format: RegisterFormat,
+    pub size: usize,
+    pub offset: usize, // offset to find it in <sys/user.h> c structs
+    pub r_type: RegisterType,
 }
 
 macro_rules! register
 {
     ($(($name:ident, $dwarf_id:expr, $size:expr, $offset:expr, $r_type:expr, $format:expr)),+) => {
         #[allow(non_camel_case_types)]
+        #[derive(Copy, Clone, PartialEq, Debug)]
         pub enum RegisterId {
             $(
                 $name,
@@ -51,6 +56,28 @@ pub static G_REGISTER_INFOS: &[RegisterInfo] = &[
     };
 }
 
+pub fn register_info_by<F>(f: F) -> Result<&'static RegisterInfo, Error>
+where
+    F: FnMut(&&RegisterInfo) -> bool,
+{
+    if let Some(info) = G_REGISTER_INFOS.iter().find(f) {
+        return Ok(info);
+    }
+    Err(Error::send("Can't find register info"))
+}
+
+pub fn register_info_by_id(id: RegisterId) -> Result<&'static RegisterInfo, Error> {
+    register_info_by(|&&x| x.id == id)
+}
+
+pub fn register_info_by_name(name: String) -> Result<&'static RegisterInfo, Error> {
+    register_info_by(|&&x| x.name == name)
+}
+
+pub fn register_info_by_dwarf_id(dwarf_id: i32) -> Result<&'static RegisterInfo, Error> {
+    register_info_by(|&&x| x.dwarf_id == dwarf_id)
+}
+
 macro_rules! gpr_offset {
     ($reg:ident) => {
         offset_of!(user, regs) + offset_of!(user_regs_struct, $reg)
@@ -65,8 +92,8 @@ macro_rules! fpr_offset {
 
 macro_rules! dr_offset {
     ($number:expr) => {
-        offset_of!(user, u_debugreg) + $number*8
-    }
+        offset_of!(user, u_debugreg) + $number * 8
+    };
 }
 
 macro_rules! fpr_size {
@@ -194,7 +221,7 @@ macro_rules! define_registers_helper {
                     16,
                     fpr_offset!(st_space) + $number*16,
                     RegisterType::FPR,
-                    RegisterFormat::VECTOR
+                    RegisterFormat::LONGDOUBLE
                 )),*]
             $($any)*
             );
@@ -267,7 +294,7 @@ macro_rules! define_registers_helper {
             $($any)*
             );
     };
-     
+
     ( @collect [$($acc:tt)*] ) => {
         register!($($acc)*);
     }
