@@ -7,10 +7,17 @@ fn main() {
         .status()
         .unwrap();
 
+    Command::new("gcc")
+        .args(&["test/targets/reg_read.s", "-pie", "-o"])
+        .arg(&format!("{}/reg_read", "target"))
+        .status()
+        .unwrap();
+
     cc::Build::new()
-        .cpp(true)           // Compile as C++
+        .cpp(true) // Compile as C++
         .file("src/bindings_decl.cpp")
         .compile("bindings_decl"); // Output library name
 
     println!("cargo::rerun-if-changed=test/targets/reg_write.s");
+    println!("cargo::rerun-if-changed=test/targets/reg_read.s");
 }

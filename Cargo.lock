@@ -3,12 +3,6 @@
 version = 4
 
 [[package]]
-name = "bytes"
-version = "1.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
-
-[[package]]
 name = "cc"
 version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -28,12 +22,11 @@ checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 name = "librustdbg"
 version = "0.1.0"
 dependencies = [
- "bytes",
  "cc",
 ]
 
 [[package]]
-name = "rust_dbg"
+name = "rust-dbg"
 version = "0.1.0"
 dependencies = [
  "librustdbg",

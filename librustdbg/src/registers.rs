@@ -42,11 +42,11 @@ impl Registers {
         }
         regs
     }
-    pub fn read_by_id(self, id: RegisterId) -> Result<Variant, Error> {
+    pub fn read_by_id(&self, id: RegisterId) -> Result<Variant, Error> {
         Ok(self.read(register_info_by_id(id)?)?)
     }
 
-    fn read(self, info: &RegisterInfo) -> Result<Variant, Error> {
+    fn read(&self, info: &RegisterInfo) -> Result<Variant, Error> {
         let bytes: *const u8 = (&self.data as *const user).cast::<u8>();
 
         unsafe {
@@ -178,7 +178,13 @@ impl Registers {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Pipe, Process, bindings::double_to_bytes, register_info::RegisterId};
+    use crate::{
+        Pipe, Process,
+        bindings::double_to_bytes,
+        register_info::RegisterId,
+        registers::Variant,
+        types::{to_byte64, to_byte128},
+    };
 
     #[test]
     fn write_register_works() {
@@ -241,5 +247,57 @@ mod tests {
         let out_bytes = &channel.read()[..];
         let output = String::from_utf8_lossy(out_bytes);
         assert!(output == "42.24");
+    }
+
+    #[test]
+    fn read_register_works() {
+        let proc = Process::launch("target/reg_read".to_string(), true, None).unwrap();
+
+        proc.borrow_mut().resume().unwrap();
+        proc.borrow_mut().wait_on_signal().unwrap();
+        let regs = proc.borrow_mut().registers.take().unwrap();
+        match regs.read_by_id(RegisterId::r13).unwrap() {
+            Variant::U64(x) => assert_eq!(x, 0xcafecafe),
+            _ => panic!("Variant value not u64"),
+        }
+        proc.borrow_mut().registers = Some(regs);
+
+        proc.borrow_mut().resume().unwrap();
+        proc.borrow_mut().wait_on_signal().unwrap();
+        let regs = proc.borrow_mut().registers.take().unwrap();
+        match regs.read_by_id(RegisterId::r13b).unwrap() {
+            Variant::U8(x) => assert_eq!(x, 42),
+            _ => panic!("Variant value not u8"),
+        }
+        proc.borrow_mut().registers = Some(regs);
+
+        proc.borrow_mut().resume().unwrap();
+        proc.borrow_mut().wait_on_signal().unwrap();
+        let regs = proc.borrow_mut().registers.take().unwrap();
+        match regs.read_by_id(RegisterId::mm0).unwrap() {
+            Variant::Byte64(x) => assert_eq!(x, to_byte64::<u64>(&0xba5eba11)),
+            _ => panic!("Variant value not Byte64"),
+        }
+        proc.borrow_mut().registers = Some(regs);
+
+        proc.borrow_mut().resume().unwrap();
+        proc.borrow_mut().wait_on_signal().unwrap();
+        let regs = proc.borrow_mut().registers.take().unwrap();
+        match regs.read_by_id(RegisterId::xmm0).unwrap() {
+            Variant::Byte128(x) => assert_eq!(x, to_byte128::<f64>(&64.125)),
+            _ => panic!("Variant value not Byte128"),
+        }
+        proc.borrow_mut().registers = Some(regs);
+
+        proc.borrow_mut().resume().unwrap();
+        proc.borrow_mut().wait_on_signal().unwrap();
+        let regs = proc.borrow_mut().registers.take().unwrap();
+        unsafe {
+            match regs.read_by_id(RegisterId::st0).unwrap() {
+                Variant::Byte128(x) => assert_eq!(x, double_to_bytes(64.125)),
+                _ => panic!("Variant value not Byte128"),
+            }
+        }
+        proc.borrow_mut().registers = Some(regs);
     }
 }
