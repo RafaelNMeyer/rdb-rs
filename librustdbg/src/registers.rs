@@ -178,16 +178,7 @@ impl Registers {
 
 #[cfg(test)]
 mod tests {
-    use std::mem::offset_of;
-
-    use crate::{
-        Pipe, Process,
-        bindings::double_to_bytes,
-        bit::from_bytes,
-        register_info::RegisterId,
-        types::{Byte128, x87_from_f64},
-        user::{self, user_fpregs_struct},
-    };
+    use crate::{Pipe, Process, bindings::double_to_bytes, register_info::RegisterId};
 
     #[test]
     fn write_register_works() {
